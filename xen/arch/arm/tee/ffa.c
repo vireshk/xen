@@ -74,6 +74,24 @@
 /* Negotiated FF-A version to use with the SPMC, 0 if not there or supported */
 static uint32_t __ro_after_init ffa_fw_version;
 
+/* List of ABI we use from the firmware */
+static const uint32_t ffa_fw_feat_needed[] = {
+    FFA_VERSION,
+    FFA_FEATURES,
+    FFA_NOTIFICATION_BITMAP_CREATE,
+    FFA_NOTIFICATION_BITMAP_DESTROY,
+    FFA_PARTITION_INFO_GET,
+    FFA_NOTIFICATION_INFO_GET_64,
+    FFA_NOTIFICATION_GET,
+    FFA_RX_RELEASE,
+    FFA_RXTX_MAP_64,
+    FFA_RXTX_UNMAP,
+    FFA_MEM_SHARE_32,
+    FFA_MEM_SHARE_64,
+    FFA_MEM_RECLAIM,
+    FFA_MSG_SEND_DIRECT_REQ_32,
+    FFA_MSG_SEND_DIRECT_REQ_64,
+};
 
 /*
  * Our rx/tx buffers shared with the SPMC. FFA_RXTX_PAGE_COUNT is the
@@ -112,20 +130,9 @@ static bool ffa_get_version(uint32_t *vers)
     return true;
 }
 
-static int32_t ffa_features(uint32_t id)
+static bool ffa_feature_supported(uint32_t id)
 {
-    return ffa_simple_call(FFA_FEATURES, id, 0, 0, 0);
-}
-
-static bool check_mandatory_feature(uint32_t id)
-{
-    int32_t ret = ffa_features(id);
-
-    if ( ret )
-        printk(XENLOG_ERR "ffa: mandatory feature id %#x missing: error %d\n",
-               id, ret);
-
-    return !ret;
+    return !ffa_simple_call(FFA_FEATURES, id, 0, 0, 0);
 }
 
 static void handle_version(struct cpu_user_regs *regs)
@@ -523,22 +530,6 @@ static bool ffa_probe(void)
     {
         printk(XENLOG_ERR "ffa: Incompatible version %#x found\n", vers);
     }
-    /*
-     * At the moment domains must support the same features used by Xen.
-     * TODO: Rework the code to allow domain to use a subset of the
-     * features supported.
-     */
-    else if ( !check_mandatory_feature(FFA_PARTITION_INFO_GET) ||
-         !check_mandatory_feature(FFA_RX_RELEASE) ||
-         !check_mandatory_feature(FFA_RXTX_MAP_64) ||
-         !check_mandatory_feature(FFA_MEM_SHARE_64) ||
-         !check_mandatory_feature(FFA_RXTX_UNMAP) ||
-         !check_mandatory_feature(FFA_MEM_SHARE_32) ||
-         !check_mandatory_feature(FFA_MEM_RECLAIM) ||
-         !check_mandatory_feature(FFA_MSG_SEND_DIRECT_REQ_32) )
-    {
-        printk(XENLOG_ERR "ffa: Mandatory feature not supported by fw\n");
-    }
     else
     {
         major_vers = (vers >> FFA_VERSION_MAJOR_SHIFT)
@@ -548,11 +539,21 @@ static bool ffa_probe(void)
                major_vers, minor_vers);
 
         ffa_fw_version = vers;
+
+        for ( int i = 0; i < ARRAY_SIZE(ffa_fw_feat_needed); i++ )
+        {
+            if ( !ffa_feature_supported(ffa_fw_feat_needed[i]) )
+            {
+                printk(XENLOG_INFO "ARM FF-A Firmware does not support 0x%08x\n",
+                       ffa_fw_feat_needed[i]);
+                ffa_fw_version = 0;
+            }
+        }
     }
 
     if ( !ffa_fw_version )
     {
-        printk(XENLOG_INFO "ARM FF-A No firmware support\n");
+        printk(XENLOG_INFO "ARM FF-A No suitable firmware support\n");
         return false;
     }
 
