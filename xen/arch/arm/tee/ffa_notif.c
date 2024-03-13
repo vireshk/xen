@@ -377,6 +377,11 @@ void ffa_notif_init(void)
     unsigned int irq;
     int ret;
 
+    /* Disable notification if bitmap create or destroy is not supported */
+    if ( !ffa_fw_supports_fid(FFA_NOTIFICATION_BITMAP_CREATE) ||
+         !ffa_fw_supports_fid(FFA_NOTIFICATION_BITMAP_DESTROY) )
+         return;
+
     arm_smccc_1_2_smc(&arg, &resp);
     if ( resp.a0 != FFA_SUCCESS_32 )
         return;

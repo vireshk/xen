@@ -14,6 +14,7 @@
 #include <xen/spinlock.h>
 #include <xen/sched.h>
 #include <xen/time.h>
+#include <xen/bitmap.h>
 
 /* Error codes */
 #define FFA_RET_OK                      0
@@ -238,6 +239,23 @@
 #define FFA_NOTIFICATION_INFO_GET_32    0x84000083U
 #define FFA_NOTIFICATION_INFO_GET_64    0xC4000083U
 
+/**
+ * Encoding of features supported or not by the fw in a bitmap:
+ * - Function IDs are going from 0x60 to 0xFF
+ * - A function can be supported in 32 and/or 64bit
+ * The bitmap has one bit for each function in 32 and 64 bit.
+ */
+#define FFA_FUNC_MIN           FFA_ERROR
+#define FFA_FUNC_MAX           FFA_NOTIFICATION_INFO_GET_64
+#define FFA_FUNC_ID(id)        ((id) & ARM_SMCCC_FUNC_MASK)
+#define FFA_FUNC_CONV(id)      (((id) >> ARM_SMCCC_CONV_SHIFT) & BIT(0,U))
+
+#define FEAT_FUNC_BITMAP_SIZE   (2 * (FFA_FUNC_ID(FFA_FUNC_MAX) - \
+                                    FFA_FUNC_ID(FFA_FUNC_MIN) + 1))
+#define FEAT_FUNC_BITNUM(id)    ((FFA_FUNC_ID(id) - \
+                                    FFA_FUNC_ID(FFA_FUNC_MIN)) << 1 | \
+                                    FFA_FUNC_CONV(id))
+
 struct ffa_ctx_notif {
     bool enabled;
 
@@ -286,6 +304,8 @@ extern void *ffa_rx;
 extern void *ffa_tx;
 extern spinlock_t ffa_rx_buffer_lock;
 extern spinlock_t ffa_tx_buffer_lock;
+extern uint32_t __ro_after_init ffa_fw_version;
+extern DECLARE_BITMAP(ffa_fw_feat_supported, FEAT_FUNC_BITMAP_SIZE);
 
 bool ffa_shm_domain_destroy(struct domain *d);
 void ffa_handle_mem_share(struct cpu_user_regs *regs);
@@ -396,6 +416,14 @@ static inline int32_t ffa_simple_call(uint32_t fid, register_t a1,
 static inline int32_t ffa_rx_release(void)
 {
     return ffa_simple_call(FFA_RX_RELEASE, 0, 0, 0, 0);
+}
+
+static inline bool ffa_fw_supports_fid(uint32_t fid)
+{
+    if ( ffa_fw_version == 0 )
+        return false;
+    else
+        return test_bit(FEAT_FUNC_BITNUM(fid), ffa_fw_feat_supported);
 }
 
 #endif /*__FFA_PRIVATE_H__*/

@@ -193,24 +193,23 @@ bool ffa_rxtx_init(void)
 {
     int e;
 
+    /* Firmware not there or not supporting */
+    if ( !ffa_fw_supports_fid(FFA_RXTX_MAP_64) )
+        return false;
+
     ffa_rx = alloc_xenheap_pages(get_order_from_pages(FFA_RXTX_PAGE_COUNT), 0);
     if ( !ffa_rx )
         return false;
 
     ffa_tx = alloc_xenheap_pages(get_order_from_pages(FFA_RXTX_PAGE_COUNT), 0);
     if ( !ffa_tx )
-        goto err;
+        return false;
 
     e = ffa_rxtx_map(__pa(ffa_tx), __pa(ffa_rx), FFA_RXTX_PAGE_COUNT);
     if ( e )
     {
         printk(XENLOG_ERR "ffa: Failed to map rxtx: error %d\n", e);
-        goto err;
+        return false;
     }
     return true;
-
-err:
-    ffa_rxtx_destroy();
-
-    return false;
 }
