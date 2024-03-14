@@ -114,11 +114,9 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
         goto out;
     }
 
-    if ( !spin_trylock(&ctx->rx_lock) )
-    {
-        ret = FFA_RET_BUSY;
+    ret = ffa_rx_acquire(d);
+    if ( ret != FFA_RET_OK )
         goto out;
-    }
 
     dst_buf = ctx->rx;
 
@@ -130,22 +128,16 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
             goto out_rx_release;
         }
 
-        if ( !ctx->page_count || !ctx->rx_is_free )
-        {
-            ret = FFA_RET_DENIED;
-            goto out_rx_release;
-        }
-
         spin_lock(&ffa_rx_buffer_lock);
 
         ret = ffa_partition_info_get(uuid, 0, &ffa_sp_count, &src_size);
 
         if ( ret )
-            goto out_rx_buf_unlock;
+            goto out_rx_hyp_unlock;
 
         /*
          * ffa_partition_info_get() succeeded so we now own the RX buffer we
-         * share with the SPMC. We must give it back using ffa_rx_release()
+         * share with the SPMC. We must give it back using ffa_hyp_rx_release()
          * once we've copied the content.
          */
 
@@ -153,7 +145,7 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
         if ( src_size < sizeof(struct ffa_partition_info_1_0) )
         {
             ret = FFA_RET_NOT_SUPPORTED;
-            goto out_rx_buf_unlock;
+            goto out_rx_hyp_release;
         }
     }
     else
@@ -166,7 +158,7 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
     {
         ret = FFA_RET_NO_MEMORY;
         if ( ffa_fw_supports_fid(FFA_PARTITION_INFO_GET) )
-            goto out_rx_buf_unlock;
+            goto out_rx_hyp_release;
         else
             goto out_rx_release;
     }
@@ -197,13 +189,13 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
         }
     }
 
-    ctx->rx_is_free = false;
-
-out_rx_buf_unlock:
+out_rx_hyp_release:
+    ffa_hyp_rx_release();
+out_rx_hyp_unlock:
     spin_unlock(&ffa_rx_buffer_lock);
 out_rx_release:
-    spin_unlock(&ctx->rx_lock);
-
+    if ( ret != FFA_RET_OK )
+        ffa_rx_release(d);
 out:
     if ( ret )
         ffa_set_regs_error(regs, ret);
@@ -370,7 +362,7 @@ bool ffa_partinfo_init(void)
     ret = init_subscribers(count, fpi_size);
 
 out:
-    ffa_rx_release();
+    ffa_hyp_rx_release();
     return ret;
 }
 
