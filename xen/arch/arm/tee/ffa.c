@@ -94,6 +94,7 @@ static const uint32_t ffa_fw_feat_needed[] = {
     FFA_MEM_RECLAIM,
     FFA_MSG_SEND_DIRECT_REQ_32,
     FFA_MSG_SEND_DIRECT_REQ_64,
+    FFA_MSG_SEND2,
 };
 
 /*
@@ -194,6 +195,7 @@ static void handle_features(struct cpu_user_regs *regs)
     case FFA_PARTITION_INFO_GET:
     case FFA_MSG_SEND_DIRECT_REQ_32:
     case FFA_MSG_SEND_DIRECT_REQ_64:
+    case FFA_MSG_SEND2:
         ffa_set_regs_success(regs, 0, 0);
         break;
     case FFA_MEM_SHARE_64:
@@ -283,6 +285,9 @@ static bool ffa_handle_call(struct cpu_user_regs *regs)
     case FFA_MSG_SEND_DIRECT_REQ_64:
         ffa_handle_msg_send_direct_req(regs, fid);
         return true;
+    case FFA_MSG_SEND2:
+        e = ffa_handle_msg_send2(regs);
+        break;
     case FFA_MEM_SHARE_32:
     case FFA_MEM_SHARE_64:
         ffa_handle_mem_share(regs);
