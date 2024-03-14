@@ -173,14 +173,26 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
 
     if ( ffa_sp_count > 0 )
     {
-        uint32_t n;
+        uint32_t n, real_num = ffa_sp_count;
         void *src_buf = ffa_rx;
 
         /* copy the secure partitions info */
-        for ( n = 0; n < ffa_sp_count; n++ )
+        for ( n = 0; n < real_num; n++ )
         {
-            memcpy(dst_buf, src_buf, dst_size);
-            dst_buf += dst_size;
+            struct ffa_partition_info_1_1 *fpi = src_buf;
+
+            /* filter out SP not following bit 15 convention if any */
+            if ( FFA_ID_IS_SECURE(fpi->id) )
+            {
+                memcpy(dst_buf, src_buf, dst_size);
+                dst_buf += dst_size;
+            }
+            else
+            {
+                printk(XENLOG_INFO "ffa: sp id 0x%04x skipped, bit 15 is 0\n",
+                       fpi->id);
+                ffa_sp_count--;
+            }
             src_buf += src_size;
         }
     }
@@ -278,10 +290,25 @@ static bool init_subscribers(uint16_t count, uint32_t fpi_size)
     {
         fpi = ffa_rx + n * fpi_size;
 
-        if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_CREATED )
-            subscr_vm_created_count++;
-        if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_DESTROYED )
-            subscr_vm_destroyed_count++;
+        /*
+         * We need to have secure partitions using bit 15 set convention for
+         * secure partition IDs.
+         * Inform the user with a log and discard giving created or destroy
+         * event to those IDs.
+         */
+        if ( !FFA_ID_IS_SECURE(fpi->id) )
+        {
+            printk(XENLOG_ERR "ffa: Firmware is not using bit 15 convention for IDs !!\n"
+                              "ffa: Secure partition with id 0x%04x cannot be used\n",
+                              fpi->id);
+        }
+        else
+        {
+            if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_CREATED )
+                subscr_vm_created_count++;
+            if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_DESTROYED )
+                subscr_vm_destroyed_count++;
+        }
     }
 
     if ( subscr_vm_created_count )
@@ -301,10 +328,13 @@ static bool init_subscribers(uint16_t count, uint32_t fpi_size)
     {
         fpi = ffa_rx + n * fpi_size;
 
-        if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_CREATED )
-            subscr_vm_created[c_pos++] = fpi->id;
-        if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_DESTROYED )
-            subscr_vm_destroyed[d_pos++] = fpi->id;
+        if ( FFA_ID_IS_SECURE(fpi->id) )
+        {
+            if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_CREATED )
+                subscr_vm_created[c_pos++] = fpi->id;
+            if ( fpi->partition_properties & FFA_PART_PROP_NOTIF_DESTROYED )
+                subscr_vm_destroyed[d_pos++] = fpi->id;
+        }
     }
 
     return true;
