@@ -93,6 +93,7 @@ void ffa_handle_notification_info_get(struct cpu_user_regs *regs)
 void ffa_handle_notification_get(struct cpu_user_regs *regs)
 {
     struct domain *d = current->domain;
+    struct ffa_ctx *ctx = d->arch.tee;
     uint32_t recv = get_user_reg(regs, 1);
     uint32_t flags = get_user_reg(regs, 2);
     uint32_t w2 = 0;
@@ -132,11 +133,7 @@ void ffa_handle_notification_get(struct cpu_user_regs *regs)
          */
         if ( ( flags  & FFA_NOTIF_FLAG_BITMAP_SP ) &&
              ( flags & FFA_NOTIF_FLAG_BITMAP_SPM ) )
-        {
-                struct ffa_ctx *ctx = d->arch.tee;
-
-                ACCESS_ONCE(ctx->notif.secure_pending) = false;
-        }
+            ACCESS_ONCE(ctx->notif.secure_pending) = false;
 
         arm_smccc_1_2_smc(&arg, &resp);
         e = ffa_get_ret_code(&resp);
@@ -155,6 +152,12 @@ void ffa_handle_notification_get(struct cpu_user_regs *regs)
         if ( flags & FFA_NOTIF_FLAG_BITMAP_SPM )
             w6 = resp.a6;
     }
+
+#ifdef CONFIG_FFA_VM_TO_VM
+    if ( flags & FFA_NOTIF_FLAG_BITMAP_HYP &&
+            test_and_clear_bool(ctx->notif.buff_full_pending) )
+        w7 = FFA_NOTIF_RX_BUFFER_FULL;
+#endif
 
     ffa_set_regs(regs, FFA_SUCCESS_32, 0, w2, w3, w4, w5, w6, w7);
 }
@@ -177,6 +180,19 @@ int ffa_handle_notification_set(struct cpu_user_regs *regs)
     return ffa_simple_call(FFA_NOTIFICATION_SET, src_dst, flags, bitmap_lo,
                            bitmap_hi);
 }
+
+#ifdef CONFIG_FFA_VM_TO_VM
+void ffa_raise_rx_buffer_full(struct domain *d)
+{
+    struct ffa_ctx *ctx = d->arch.tee;
+
+    if ( !ctx )
+        return;
+
+    if ( !test_and_set_bool(ctx->notif.buff_full_pending) )
+        vgic_inject_irq(d, d->vcpu[0], notif_sri_irq, true);
+}
+#endif
 
 /*
  * Extract a 16-bit ID (index n) from the successful return value from
