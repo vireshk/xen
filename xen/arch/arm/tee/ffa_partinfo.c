@@ -77,7 +77,21 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
     };
     uint32_t src_size, dst_size;
     void *dst_buf;
-    uint32_t ffa_sp_count = 0;
+    uint32_t ffa_vm_count = 0, ffa_sp_count = 0;
+#ifdef CONFIG_FFA_VM_TO_VM
+    struct domain *dom;
+
+    /* Count the number of VM with FF-A support */
+    rcu_read_lock(&domlist_read_lock);
+    for_each_domain( dom )
+    {
+        struct ffa_ctx *vm = dom->arch.tee;
+
+        if (dom != d && vm != NULL && vm->guest_vers != 0)
+            ffa_vm_count++;
+    }
+    rcu_read_unlock(&domlist_read_lock);
+#endif
 
     /*
      * If the guest is v1.0, he does not get back the entry size so we must
@@ -148,13 +162,9 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
             goto out_rx_hyp_release;
         }
     }
-    else
-    {
-        ret = FFA_RET_OK;
-        goto out_rx_release;
-    }
 
-    if ( ctx->page_count * FFA_PAGE_SIZE < ffa_sp_count * dst_size )
+    if ( ctx->page_count * FFA_PAGE_SIZE <
+         (ffa_sp_count + ffa_vm_count) * dst_size )
     {
         ret = FFA_RET_NO_MEMORY;
         if ( ffa_fw_supports_fid(FFA_PARTITION_INFO_GET) )
@@ -189,6 +199,77 @@ void ffa_handle_partition_info_get(struct cpu_user_regs *regs)
         }
     }
 
+    if ( ffa_fw_supports_fid(FFA_PARTITION_INFO_GET) )
+    {
+        ffa_hyp_rx_release();
+        spin_unlock(&ffa_rx_buffer_lock);
+    }
+
+#ifdef CONFIG_FFA_VM_TO_VM
+    if ( ffa_vm_count )
+    {
+        uint32_t curr = 0;
+        /* add the VM informations if any */
+        rcu_read_lock(&domlist_read_lock);
+        for_each_domain( dom )
+        {
+            struct ffa_ctx *vm = dom->arch.tee;
+
+            /*
+             * we do not add the VM calling to the list and only VMs with
+             * FF-A support
+             */
+            if (dom != d && vm != NULL && vm->guest_vers != 0)
+            {
+                /*
+                 * We do not have UUID info for VMs so use
+                 * the 1.0 structure so that we set UUIDs to
+                 * zero using memset
+                 */
+                struct ffa_partition_info_1_0 srcvm;
+
+                if ( curr == ffa_vm_count )
+                {
+                    /*
+                     * The number of domains changed since we counted them, we
+                     * can add new ones if there is enough space in the
+                     * destination buffer so check it or go out with an error.
+                     */
+                    ffa_vm_count++;
+                    if ( ctx->page_count * FFA_PAGE_SIZE <
+                         (ffa_sp_count + ffa_vm_count) * dst_size )
+                    {
+                        ret = FFA_RET_NO_MEMORY;
+                        rcu_read_unlock(&domlist_read_lock);
+                        goto out_rx_release;
+                    }
+                }
+
+                srcvm.id = ffa_get_vm_id(dom);
+                srcvm.execution_context = dom->max_vcpus;
+                srcvm.partition_properties = FFA_PART_VM_PROP;
+                if ( is_64bit_domain(dom) )
+                    srcvm.partition_properties |= FFA_PART_PROP_AARCH64_STATE;
+
+                memcpy(dst_buf, &srcvm, MIN(sizeof(srcvm), dst_size));
+
+                if ( dst_size > sizeof(srcvm) )
+                    memset(dst_buf + sizeof(srcvm), 0,
+                           dst_size - sizeof(srcvm));
+
+                dst_buf += dst_size;
+                curr++;
+            }
+        }
+        rcu_read_unlock(&domlist_read_lock);
+
+        /* the number of domains could have reduce since the initial count */
+        ffa_vm_count = curr;
+    }
+#endif
+
+    goto out;
+
 out_rx_hyp_release:
     ffa_hyp_rx_release();
 out_rx_hyp_unlock:
@@ -200,7 +281,7 @@ out:
     if ( ret )
         ffa_set_regs_error(regs, ret);
     else
-        ffa_set_regs_success(regs, ffa_sp_count, dst_size);
+        ffa_set_regs_success(regs, ffa_sp_count + ffa_vm_count, dst_size);
 }
 
 static int32_t ffa_direct_req_send_vm(uint16_t sp_id, uint16_t vm_id,
