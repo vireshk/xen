@@ -141,13 +141,24 @@ static void handle_version(struct cpu_user_regs *regs)
     struct ffa_ctx *ctx = d->arch.tee;
     uint32_t vers = get_user_reg(regs, 1);
 
-    if ( vers < FFA_VERSION_1_1 )
-        vers = FFA_VERSION_1_0;
-    else
-        vers = FFA_VERSION_1_1;
+    /**
+     * As of now we only support 1.0 or 1.1.
+     * For any 1.x >= 1.1 return OK with 1.1
+     * For 1.0 return OK with 1.0
+     * For anything else return an error.
+     */
+    if ( (vers >> FFA_VERSION_MAJOR_SHIFT) == FFA_MY_VERSION_MAJOR )
+    {
+        if ( vers < FFA_VERSION_1_1 )
+            vers = FFA_VERSION_1_0;
+        else
+            vers = FFA_VERSION_1_1;
 
-    ctx->guest_vers = vers;
-    ffa_set_regs(regs, vers, 0, 0, 0, 0, 0, 0, 0);
+        ctx->guest_vers = vers;
+        ffa_set_regs(regs, vers, 0, 0, 0, 0, 0, 0, 0);
+    }
+    else
+        ffa_set_regs_error(regs, FFA_RET_NOT_SUPPORTED);
 }
 
 static void handle_msg_send_direct_req(struct cpu_user_regs *regs, uint32_t fid)
@@ -526,19 +537,30 @@ static bool ffa_probe(void)
     {
         gprintk(XENLOG_ERR, "ffa: FFA_VERSION returned not supported\n");
     }
-    else if ( vers < FFA_MIN_SPMC_VERSION || vers > FFA_MY_VERSION )
+    else if ( vers < FFA_MIN_SPMC_VERSION ||
+              (vers >> FFA_VERSION_MAJOR_SHIFT) != FFA_MY_VERSION_MAJOR )
     {
         printk(XENLOG_ERR "ffa: Incompatible version %#x found\n", vers);
     }
     else
     {
+
         major_vers = (vers >> FFA_VERSION_MAJOR_SHIFT)
                      & FFA_VERSION_MAJOR_MASK;
         minor_vers = vers & FFA_VERSION_MINOR_MASK;
         printk(XENLOG_INFO "ARM FF-A Firmware version %u.%u\n",
                major_vers, minor_vers);
 
-        ffa_fw_version = vers;
+        /**
+         * If the call did not fail, the version that will be used will be ours
+         * even if the firware might support a better one or the one returned
+         * if it is lower but compatible with the one we requested.
+         * A version too low is rejected before.
+         */
+        if ( vers > FFA_MY_VERSION )
+            ffa_fw_version = FFA_MY_VERSION;
+        else
+            ffa_fw_version = vers;
 
         for ( int i = 0; i < ARRAY_SIZE(ffa_fw_feat_needed); i++ )
         {
