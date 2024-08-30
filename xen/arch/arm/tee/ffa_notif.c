@@ -429,8 +429,6 @@ int ffa_notif_domain_init(struct domain *d)
     if ( res )
         return -ENOMEM;
 
-    ctx->notif.enabled = true;
-
     return 0;
 }
 
@@ -438,9 +436,6 @@ void ffa_notif_domain_destroy(struct domain *d)
 {
     struct ffa_ctx *ctx = d->arch.tee;
 
-    if ( ctx->notif.enabled )
-    {
+    if ( notif_enabled )
         ffa_notification_bitmap_destroy(ffa_get_vm_id(d));
-        ctx->notif.enabled = false;
-    }
 }
